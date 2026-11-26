@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gato Comilão</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#545367; --panel:#3f3e52; --ink:#f4f4fa; --muted:#c4c3d6;
+    --accent:#455FE1; --line:#2b2a3a;
+  }
+  *{box-sizing:border-box;margin:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"Baloo 2",system-ui,sans-serif; font-weight:500;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+    padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));
+    min-height:100dvh; overscroll-behavior:none; -webkit-user-select:none; user-select:none;
+  }
+  /* 1º nível: título */
+  h1{font-size:clamp(1.6rem,5vw,2.4rem);font-weight:800;line-height:1;letter-spacing:.01em}
+  /* 2º nível: placar */
+  .hud{display:flex;gap:10px;width:var(--size)}
+  .stat{flex:1;background:var(--panel);border-radius:14px;padding:6px 14px;display:flex;justify-content:space-between;align-items:baseline}
+  .stat span{color:var(--muted);font-size:.95rem}
+  .stat b{font-size:1.5rem;font-weight:800;color:var(--ink)}
+  .stat.best b{color:var(--muted);font-size:1.2rem}
+  .btn{border:0;font:inherit;font-weight:800;cursor:pointer;border-radius:14px;color:#fff;background:var(--accent);padding:6px 16px}
+  .btn:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+  .btn.ghost{background:var(--panel);color:var(--ink)}
+  /* 3º nível (centro das atenções): tabuleiro */
+  :root{--size:min(92vw,560px,calc(100dvh - 300px))}
+  @media (hover:hover) and (pointer:fine){:root{--size:min(92vw,560px,calc(100dvh - 190px))}}
+  .board{position:relative;width:var(--size);height:var(--size);border-radius:18px;overflow:hidden;box-shadow:0 0 0 5px var(--accent),0 18px 40px rgba(0,0,0,.35)}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;background:rgba(84,83,103,.9);padding:20px}
+  .overlay[hidden]{display:none}
+  .overlay h2{font-size:clamp(1.5rem,6vw,2.2rem);font-weight:800}
+  .overlay p{color:var(--muted);max-width:30ch}
+  .overlay .btn{font-size:1.3rem;padding:8px 28px}
+  /* 4º nível: controles de toque (só aparecem em telas de toque) */
+  .pad{display:none;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(2,56px);gap:8px}
+  .pad button{border:0;border-radius:16px;background:var(--panel);color:var(--ink);font-size:1.6rem;touch-action:manipulation}
+  .pad button:active{background:var(--accent);color:#fff}
+  .pad .up{grid-column:2}.pad .left{grid-row:2;grid-column:1}.pad .down{grid-row:2;grid-column:2}.pad .right{grid-row:2;grid-column:3}
+  @media (hover:none) and (pointer:coarse){.pad{display:grid}}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+  <h1>Gato Comilão</h1>
+
+  <div class="hud">
+    <div class="stat"><span>Peixes</span><b id="score">0</b></div>
+    <div class="stat best"><span>Recorde</span><b id="best">0</b></div>
+    <button class="btn ghost" id="pauseBtn" aria-label="Pausar">⏸</button>
+  </div>
+
+  <div class="board">
+    <canvas id="c" width="640" height="640" aria-label="Tabuleiro do jogo"></canvas>
+    <div class="overlay" id="overlay">
+      <h2 id="ovTitle">Pronto pra comer?</h2>
+      <p id="ovText">Guie o gato até os peixes. A cada peixe ele fica mais comprido.</p>
+      <button class="btn" id="playBtn">Jogar</button>
+    </div>
+  </div>
+
+  <div class="pad" aria-label="Controles">
+    <button class="up" data-d="up" aria-label="Cima">▲</button>
+    <button class="left" data-d="left" aria-label="Esquerda">◀</button>
+    <button class="down" data-d="down" aria-label="Baixo">▼</button>
+    <button class="right" data-d="right" aria-label="Direita">▶</button>
+  </div>
+
+<script>
+/* ============ CONFIGURAÇÃO ============
+   Todas as imagens devem estar DESENHADAS OLHANDO PARA A DIREITA (→).
+   O código gira os sprites conforme a direção do gato.
+   Se um arquivo não existir, o jogo desenha um substituto simples. */
+const SPRITES = {
+  tail: "img/patas-traseiras.png",
+  body: "img/corpo.png",
+  curve: "img/curva.png",     // corpo dobrando (veja CURVE_OPENINGS abaixo)
+  head: "img/cabeca.png",
+  fish: "img/peixe.png",
+  bg:   "img/fundo.png"       // grade 8x8 (quadrada)
+};
+// Quais bordas da imagem curva.png têm abertura (por onde o corpo entra e sai).
+// Opções: "up", "down", "left", "right". Use duas bordas vizinhas, ex.: ["right","down"].
+const CURVE_OPENINGS = ["right", "down"];
+const GRID = 8;               // células por lado (8x8)
+const START_DELAY = 300;      // ms por passo no início (maior = mais lento)
+const MIN_DELAY = 140;        // limite de velocidade
+const SPEEDUP = 5;            // ms mais rápido a cada peixe
+
+/* ============ SETUP ============ */
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const CELL = cv.width / GRID;
+const $ = id => document.getElementById(id);
+const imgs = {};
+for (const [k, src] of Object.entries(SPRITES)) {
+  if (!src) continue;
+  const im = new Image();
+  im.onload = () => imgs[k] = im;      // só usa se carregou
+  im.src = src;
+}
+
+let best = 0;
+try { best = +localStorage.getItem("gato-best") || 0; } catch(e){}
+$("best").textContent = best;
+
+const DIRS = { up:{x:0,y:-1}, down:{x:0,y:1}, left:{x:-1,y:0}, right:{x:1,y:0} };
+let cat, dir, queue, fish, score, delay, last, state = "ready"; // ready | playing | paused | over
+
+function reset(){
+  const m = Math.floor(GRID/2);
+  cat = [{x:m,y:m},{x:m-1,y:m},{x:m-2,y:m}];  // cabeça, corpo, rabo
+  dir = DIRS.right; queue = [];
+  score = 0; delay = START_DELAY; last = 0;
+  $("score").textContent = 0;
+  placeFish();
+}
+function placeFish(){
+  let p;
+  do { p = {x:Math.floor(Math.random()*GRID), y:Math.floor(Math.random()*GRID)}; }
+  while (cat.some(s => s.x===p.x && s.y===p.y));
+  fish = p;
+}
+
+/* ============ LÓGICA ============ */
+function step(){
+  if (queue.length) dir = queue.shift();
+  const h = {x:cat[0].x+dir.x, y:cat[0].y+dir.y};
+  const eating = h.x===fish.x && h.y===fish.y;
+  const body = eating ? cat : cat.slice(0,-1);   // o rabo sai do lugar se não comer
+  if (h.x<0||h.y<0||h.x>=GRID||h.y>=GRID||body.some(s=>s.x===h.x&&s.y===h.y)) return gameOver();
+  cat.unshift(h);
+  if (eating){
+    score++; $("score").textContent = score;
+    delay = Math.max(MIN_DELAY, delay - SPEEDUP);
+    if (cat.length >= GRID*GRID) return gameOver(true);
+    placeFish();
+  } else cat.pop();
+}
+function turn(name){
+  if (state==="ready"||state==="over") return;
+  const d = DIRS[name], ref = queue.length ? queue[queue.length-1] : dir;
+  if (d.x === -ref.x && d.y === -ref.y) return;  // proíbe meia-volta
+  if (d.x === ref.x && d.y === ref.y) return;
+  if (queue.length < 2) queue.push(d);
+}
+function start(){
+  reset(); state = "playing"; $("overlay").hidden = true; last = performance.now();
+}
+function togglePause(){
+  if (state==="playing"){ state="paused"; show("Pausado","Respire, o peixe espera.","Continuar"); }
+  else if (state==="paused"){ state="playing"; $("overlay").hidden = true; last = performance.now(); }
+}
+function gameOver(won){
+  state = "over";
+  if (score > best){ best = score; $("best").textContent = best; try{localStorage.setItem("gato-best",best);}catch(e){} }
+  show(won ? "Barriga cheia!" : "Ops!", `Você comeu ${score} ${score===1?"peixe":"peixes"}.`, "Jogar de novo");
+}
+function show(t, p, b){ $("ovTitle").textContent=t; $("ovText").textContent=p; $("playBtn").textContent=b; $("overlay").hidden=false; $("playBtn").focus(); }
+
+/* ============ DESENHO ============ */
+function drawSprite(key, cx, cy, angle, size, fallback){
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
+  if (imgs[key]) ctx.drawImage(imgs[key], -size/2, -size/2, size, size);
+  else fallback(size);
+  ctx.restore();
+}
+const fb = {
+  tail: s => { ctx.fillStyle="#e08a3c"; ctx.beginPath(); ctx.ellipse(0,0,s*.4,s*.32,0,0,7); ctx.fill();
+               ctx.fillStyle="#f6c48b"; [-1,1].forEach(k=>{ctx.beginPath();ctx.ellipse(-s*.38,k*s*.22,s*.12,s*.09,0,0,7);ctx.fill();}); },
+  body: s => { ctx.fillStyle="#e08a3c"; ctx.fillRect(-s/2-1,-s*.34,s+2,s*.68); ctx.fillStyle="#b86a24"; ctx.fillRect(-s*.1,-s*.34,s*.14,s*.68); },
+  curve: s => { ctx.fillStyle="#e08a3c"; ctx.fillRect(-s*.34,-s*.34,s/2+s*.34+1,s*.68); ctx.fillRect(-s*.34,-s*.34,s*.68,s/2+s*.34+1); },
+  head: s => { ctx.fillStyle="#e08a3c"; ctx.beginPath(); ctx.arc(0,0,s*.38,0,7); ctx.fill();
+               ctx.beginPath(); ctx.moveTo(s*.05,-s*.2);ctx.lineTo(s*.12,-s*.48);ctx.lineTo(s*.32,-s*.2);ctx.fill();
+               ctx.beginPath(); ctx.moveTo(s*.05,s*.2);ctx.lineTo(s*.12,s*.48);ctx.lineTo(s*.32,s*.2);ctx.fill();
+               ctx.fillStyle="#17323f"; [-1,1].forEach(k=>{ctx.beginPath();ctx.arc(s*.18,k*s*.13,s*.05,0,7);ctx.fill();}); },
+  fish: s => { ctx.fillStyle="#5fa8d3"; ctx.beginPath(); ctx.ellipse(0,0,s*.3,s*.18,0,0,7); ctx.fill();
+               ctx.beginPath(); ctx.moveTo(-s*.25,0); ctx.lineTo(-s*.45,-s*.15); ctx.lineTo(-s*.45,s*.15); ctx.fill();
+               ctx.fillStyle="#17323f"; ctx.beginPath(); ctx.arc(s*.16,-s*.04,s*.03,0,7); ctx.fill(); }
+};
+
+// gira (esquerda, baixo) em passos de 90° até coincidir com as duas pontas da curva
+function curveAngle(a, b){
+  const rot = v => ({x:-v.y, y:v.x});
+  let l = {...DIRS[CURVE_OPENINGS[0]]}, d = {...DIRS[CURVE_OPENINGS[1]]};
+  for (let k=0; k<4; k++){
+    const hit = (p,q) => p.x===q.x && p.y===q.y;
+    if ((hit(l,a)&&hit(d,b)) || (hit(l,b)&&hit(d,a))) return k*Math.PI/2;
+    l = rot(l); d = rot(d);
+  }
+  return 0;
+}
+
+function draw(t){
+  // fundo
+  if (imgs.bg) ctx.drawImage(imgs.bg, 0, 0, cv.width, cv.height);
+  else for (let y=0;y<GRID;y++) for (let x=0;x<GRID;x++){
+    ctx.fillStyle = (x+y)%2 ? "#d0e3da" : "#dcebe4"; ctx.fillRect(x*CELL,y*CELL,CELL,CELL);
+  }
+  // peixe (balança de leve)
+  const bob = Math.sin(t/220)*0.12;
+  drawSprite("fish", (fish.x+.5)*CELL, (fish.y+.5)*CELL, bob, CELL*0.8, fb.fish);
+  // gato: do rabo até a cabeça, assim a cabeça fica sempre por cima
+  for (let i = cat.length-1; i >= 0; i--){
+    const s = cat[i];
+    const ahead = i===0 ? dir : {x:cat[i-1].x-s.x, y:cat[i-1].y-s.y};
+    let ang = Math.atan2(ahead.y, ahead.x);
+    let key = i===0 ? "head" : i===cat.length-1 ? "tail" : "body";
+    if (key==="body"){
+      const behind = {x:cat[i+1].x-s.x, y:cat[i+1].y-s.y};
+      if (behind.x !== -ahead.x || behind.y !== -ahead.y){   // não está em linha reta: é uma curva
+        key = "curve"; ang = curveAngle(behind, ahead);
+      }
+    }
+    const size = CELL * 1.02;   // cabeça e corpo com o mesmo tamanho
+    drawSprite(key, (s.x+.5)*CELL, (s.y+.5)*CELL, ang, size, fb[key]);
+  }
+}
+
+function loop(t){
+  if (state==="playing" && t-last >= delay){ last = t; step(); }
+  draw(t);
+  requestAnimationFrame(loop);
+}
+
+/* ============ CONTROLES ============ */
+addEventListener("keydown", e=>{
+  const map = {ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right",W:"up",S:"down",A:"left",D:"right"};
+  if (map[e.key]){ e.preventDefault(); if (state==="ready"||state==="over") return start(); turn(map[e.key]); }
+  else if (e.key===" " || e.key==="p"){ if (document.activeElement.tagName==="BUTTON") return; e.preventDefault(); state==="ready"||state==="over" ? start() : togglePause(); }
+});
+$("playBtn").onclick = () => (state==="paused" ? togglePause() : start());
+$("pauseBtn").onclick = togglePause;
+document.querySelectorAll(".pad button").forEach(b=>{
+  b.addEventListener("pointerdown", e=>{ e.preventDefault(); turn(b.dataset.d); });
+});
+// deslizar o dedo no tabuleiro
+let t0 = null;
+cv.addEventListener("touchstart", e=>{ const t=e.touches[0]; t0={x:t.clientX,y:t.clientY}; }, {passive:true});
+cv.addEventListener("touchmove", e=>{
+  if (!t0) return; const t=e.touches[0], dx=t.clientX-t0.x, dy=t.clientY-t0.y;
+  if (Math.max(Math.abs(dx),Math.abs(dy)) < 24) return;
+  turn(Math.abs(dx)>Math.abs(dy) ? (dx>0?"right":"left") : (dy>0?"down":"up"));
+  t0 = {x:t.clientX,y:t.clientY};
+}, {passive:true});
+document.addEventListener("visibilitychange", ()=>{ if (document.hidden && state==="playing") togglePause(); });
+
+reset(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
